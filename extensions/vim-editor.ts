@@ -56,7 +56,7 @@
  * Visual and visual-line selections are highlighted in the input box.
  *
  * Cursor shape: normal and visual modes use pi's drawn block cursor. Insert
- * mode draws a thin one instead -- see INSERT_CURSOR_STYLE below.
+ * mode uses the terminal's bar cursor -- see INSERT_CURSOR_STYLE below.
  */
 
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -93,15 +93,13 @@ const BLOCK_CURSOR_SGR = "\x1b[7m";
 /**
  * How the insert-mode cursor is drawn.
  *
- *   "underline"  Drawn into the frame, exactly like pi's block cursor but as a
- *                thin line. Always sits in the right place.
- *   "bar"        The terminal's own beam, via DECSCUSR. A true vertical bar,
- *                but its position is written after the frame rather than as
- *                part of it, so it can lag behind fast typing and sit at the
- *                edge of the input box until the next keypress settles it.
+ *   "underline"  Legacy drawn underline, for pi-tui before 1.2.0 only.
+ *   "bar"        The terminal's own beam, via DECSCUSR. pi positions it using
+ *                CURSOR_MARKER and automatically hides the drawn block when
+ *                the hardware cursor is enabled (pi-tui 1.2.0).
  *   "block"      Same block cursor as normal mode.
  */
-const INSERT_CURSOR_STYLE: "underline" | "bar" | "block" = "underline";
+const INSERT_CURSOR_STYLE: "underline" | "bar" | "block" = "bar";
 
 /**
  * Put the parked draft back after a command actually runs, not just when it is
@@ -842,21 +840,24 @@ class VimEditor extends CustomEditor {
 
 	/**
 	 * Normal and visual modes use pi's drawn block cursor with the real one
-	 * hidden. Insert mode does the reverse: show the terminal's own cursor as a
-	 * bar and strip the drawn block, so there is exactly one cursor either way.
+	 * hidden. Insert/command mode shows the terminal's own cursor as a bar.
+	 * pi's TUI automatically suppresses the focused editor's fake block cursor;
+	 * keep its markers intact so cursor placement and suppression both work.
 	 * Driven from render() rather than from each mode assignment so it cannot
 	 * drift out of sync with the mode.
 	 */
 	private barCursor: boolean | null = null;
+	private originalHardwareCursor: boolean | null = null;
 
 	private syncCursorShape(): void {
 		if (INSERT_CURSOR_STYLE !== "bar") return;
 		const bar = this.mode === "insert" || this.mode === "command";
 		if (this.barCursor === bar) return;
-		this.barCursor = bar;
 		try {
+			this.originalHardwareCursor ??= this.tui.getShowHardwareCursor();
 			this.tui.setShowHardwareCursor(bar);
 			this.tui.terminal.write(bar ? INSERT_CURSOR_SHAPE : RESTORE_CURSOR_SHAPE);
+			this.barCursor = bar;
 		} catch {
 			// No terminal attached (tests, RPC mode); the drawn cursor still works.
 		}
@@ -864,22 +865,22 @@ class VimEditor extends CustomEditor {
 
 	/** Hand the cursor back to the terminal. Idempotent. */
 	restoreCursorShape(): void {
-		if (INSERT_CURSOR_STYLE !== "bar") return;
-		this.barCursor = null;
+		if (INSERT_CURSOR_STYLE !== "bar" || this.originalHardwareCursor === null) return;
 		try {
-			this.tui.setShowHardwareCursor(false);
+			this.tui.setShowHardwareCursor(this.originalHardwareCursor);
 			this.tui.terminal.write(RESTORE_CURSOR_SHAPE);
 		} catch {
 			// Nothing to restore.
 		}
+		this.barCursor = null;
+		this.originalHardwareCursor = null;
 	}
 
 	/**
 	 * Restyle pi's drawn block cursor, keeping the zero-width marker in place so
-	 * IME candidate windows still land on the right cell. Passing "" strips the
-	 * styling entirely, which is what the "bar" style wants so the terminal's
-	 * own cursor is the only one visible. The marker is only emitted while
-	 * focused, which is also the only time this should run.
+	 * IME candidate windows still land on the right cell. This legacy underline
+	 * path expects the pre-1.2.0 editor's SGR output. The bar style leaves all
+	 * cursor markers untouched and lets the TUI handle them instead.
 	 */
 	private restyleCursorCell(rendered: string[], sgr: string): void {
 		const count = this.inner.renderedVisibleLineCount;
@@ -910,7 +911,6 @@ class VimEditor extends CustomEditor {
 
 		if (this.mode === "insert" || this.mode === "command") {
 			if (INSERT_CURSOR_STYLE === "underline") this.restyleCursorCell(lines, UNDERLINE_CURSOR_SGR);
-			else if (INSERT_CURSOR_STYLE === "bar") this.restyleCursorCell(lines, "");
 		} else if (this.mode === "visual" || this.mode === "vline") {
 			try {
 				this.highlightSelection(lines, width);

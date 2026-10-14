@@ -1,0 +1,19 @@
+{
+  "name": "vim-editor-pi",
+  "version": "0.1.0",
+  "description": "Vim-like modal editing for pi with a native insert-mode bar cursor.",
+  "type": "module",
+  "keywords": ["pi-package", "vim", "editor"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/felixwoolford/vim-editor-pi.git"
+  },
+  "files": ["extensions", "README.md"],
+  "pi": {
+    "extensions": ["./extensions/vim-editor.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
