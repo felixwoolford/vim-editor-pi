@@ -56,7 +56,7 @@
  * Visual and visual-line selections are highlighted in the input box.
  *
  * Cursor shape: normal and visual modes use pi's drawn block cursor. Insert
- * mode uses the terminal's bar cursor -- see INSERT_CURSOR_STYLE below.
+ * mode uses a drawn underline -- see INSERT_CURSOR_STYLE below.
  */
 
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -64,6 +64,7 @@ import {
 	CURSOR_MARKER,
 	decodeKittyPrintable,
 	matchesKey,
+	renderFakeCursor,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -87,19 +88,21 @@ const SELECTION_SGR = "\x1b[7m";
 const SELECTION_CURSOR_SGR = "\x1b[27m";
 const RESET_SGR = "\x1b[0m";
 
-/** The reverse-video run pi uses to draw its own block cursor. */
+/** Legacy SGR cursor output, used by pi-tui before 1.2.0. */
 const BLOCK_CURSOR_SGR = "\x1b[7m";
 
+/** Derive pi's deferred cursor wrappers from its public helper. */
+const [FAKE_CURSOR_START, FAKE_CURSOR_END] = renderFakeCursor("\0").split("\0") as [string, string];
+
 /**
- * How the insert-mode cursor is drawn.
+ * How the insert/command-mode cursor is drawn.
  *
- *   "underline"  Legacy drawn underline, for pi-tui before 1.2.0 only.
- *   "bar"        The terminal's own beam, via DECSCUSR. pi positions it using
- *                CURSOR_MARKER and automatically hides the drawn block when
- *                the hardware cursor is enabled (pi-tui 1.2.0).
- *   "block"      Same block cursor as normal mode.
+ *   "underline"  Drawn into the frame: stable even while typing quickly.
+ *   "bar"        Experimental terminal beam, via DECSCUSR. Can jump to the
+ *                right edge on some setups; use "underline" if that happens.
+ *   "block"      Same drawn block cursor as normal mode.
  */
-const INSERT_CURSOR_STYLE: "underline" | "bar" | "block" = "bar";
+const INSERT_CURSOR_STYLE: "underline" | "bar" | "block" = "underline";
 
 /**
  * Put the parked draft back after a command actually runs, not just when it is
@@ -109,6 +112,7 @@ const RESTORE_DRAFT_AFTER_COMMAND = true;
 
 /** SGR for the "underline" style. 4 = underline, 4:3 = curly on some terminals. */
 const UNDERLINE_CURSOR_SGR = "\x1b[4m";
+const UNDERLINE_CURSOR_END_SGR = "\x1b[24m";
 
 /**
  * DECSCUSR shapes for the "bar" style. 6 = steady bar, 5 = blinking bar,
@@ -839,25 +843,24 @@ class VimEditor extends CustomEditor {
 	// -------------------------------------------------------------- render
 
 	/**
-	 * Normal and visual modes use pi's drawn block cursor with the real one
-	 * hidden. Insert/command mode shows the terminal's own cursor as a bar.
-	 * pi's TUI automatically suppresses the focused editor's fake block cursor;
-	 * keep its markers intact so cursor placement and suppression both work.
-	 * Driven from render() rather than from each mode assignment so it cannot
-	 * drift out of sync with the mode.
+	 * Drawn cursors require the hardware cursor to be hidden, even if enabled
+	 * in pi's settings. Only the experimental bar style enables it in insert/
+	 * command mode, letting pi suppress the corresponding drawn block.
+	 * Driven from render() so every mode change and settings reload is covered.
 	 */
-	private barCursor: boolean | null = null;
+	private hardwareCursor: boolean | null = null;
 	private originalHardwareCursor: boolean | null = null;
 
 	private syncCursorShape(): void {
-		if (INSERT_CURSOR_STYLE !== "bar") return;
-		const bar = this.mode === "insert" || this.mode === "command";
-		if (this.barCursor === bar) return;
+		const hardware = INSERT_CURSOR_STYLE === "bar" && (this.mode === "insert" || this.mode === "command");
 		try {
 			this.originalHardwareCursor ??= this.tui.getShowHardwareCursor();
-			this.tui.setShowHardwareCursor(bar);
-			this.tui.terminal.write(bar ? INSERT_CURSOR_SHAPE : RESTORE_CURSOR_SHAPE);
-			this.barCursor = bar;
+			if (this.hardwareCursor === hardware && this.tui.getShowHardwareCursor() === hardware) return;
+			this.tui.setShowHardwareCursor(hardware);
+			if (INSERT_CURSOR_STYLE === "bar") {
+				this.tui.terminal.write(hardware ? INSERT_CURSOR_SHAPE : RESTORE_CURSOR_SHAPE);
+			}
+			this.hardwareCursor = hardware;
 		} catch {
 			// No terminal attached (tests, RPC mode); the drawn cursor still works.
 		}
@@ -865,22 +868,21 @@ class VimEditor extends CustomEditor {
 
 	/** Hand the cursor back to the terminal. Idempotent. */
 	restoreCursorShape(): void {
-		if (INSERT_CURSOR_STYLE !== "bar" || this.originalHardwareCursor === null) return;
+		if (this.originalHardwareCursor === null) return;
 		try {
 			this.tui.setShowHardwareCursor(this.originalHardwareCursor);
-			this.tui.terminal.write(RESTORE_CURSOR_SHAPE);
+			if (INSERT_CURSOR_STYLE === "bar") this.tui.terminal.write(RESTORE_CURSOR_SHAPE);
 		} catch {
 			// Nothing to restore.
 		}
-		this.barCursor = null;
+		this.hardwareCursor = null;
 		this.originalHardwareCursor = null;
 	}
 
 	/**
-	 * Restyle pi's drawn block cursor, keeping the zero-width marker in place so
-	 * IME candidate windows still land on the right cell. This legacy underline
-	 * path expects the pre-1.2.0 editor's SGR output. The bar style leaves all
-	 * cursor markers untouched and lets the TUI handle them instead.
+	 * Replace pi's deferred fake-cursor wrappers before the TUI resolves them
+	 * into reverse video. Keep CURSOR_MARKER intact for IME positioning. Also
+	 * accept the older editor's direct SGR cursor output.
 	 */
 	private restyleCursorCell(rendered: string[], sgr: string): void {
 		const count = this.inner.renderedVisibleLineCount;
@@ -890,15 +892,18 @@ class VimEditor extends CustomEditor {
 			const at = row.indexOf(CURSOR_MARKER);
 			if (at < 0) continue;
 			const rest = row.slice(at + CURSOR_MARKER.length);
-			if (!rest.startsWith(BLOCK_CURSOR_SGR)) return;
-			const end = rest.indexOf(RESET_SGR, BLOCK_CURSOR_SGR.length);
+			const deferred = rest.startsWith(FAKE_CURSOR_START);
+			const startCode = deferred ? FAKE_CURSOR_START : BLOCK_CURSOR_SGR;
+			const endCode = deferred ? FAKE_CURSOR_END : RESET_SGR;
+			if (!rest.startsWith(startCode)) return;
+			const end = rest.indexOf(endCode, startCode.length);
 			if (end < 0) return;
-			const cell = rest.slice(BLOCK_CURSOR_SGR.length, end);
-			const tail = rest.slice(end + RESET_SGR.length);
+			const cell = rest.slice(startCode.length, end);
+			const tail = rest.slice(end + endCode.length);
 			rendered[k] =
 				row.slice(0, at) +
 				CURSOR_MARKER +
-				(sgr ? sgr + cell + RESET_SGR : cell) +
+				sgr + cell + UNDERLINE_CURSOR_END_SGR +
 				tail;
 			return;
 		}
@@ -1075,8 +1080,8 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	// Leaving the terminal cursor as a bar would follow the user back to their
-	// shell. session_shutdown also fires on /new and /fork.
+	// Restore the original hardware-cursor setting and any experimental bar
+	// shape. session_shutdown also fires on /new and /fork.
 	pi.on("session_shutdown", () => {
 		editor?.restoreCursorShape();
 		editor = undefined;

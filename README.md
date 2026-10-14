@@ -1,6 +1,6 @@
 # vim-editor-pi
 
-Vim-like editing for pi. Starts in **normal mode**; insert/command mode uses a steady bar cursor, normal/visual mode a block. Use pi-tui 1.2.0+ and a terminal supporting cursor-shape changes.
+Vim-like editing for pi. Starts in **normal mode**; insert/command mode uses a drawn underline (`_`), normal/visual mode a block. The hardware cursor is hidden while the editor is active. Use pi-tui 1.2.0+.
 
 ## Install
 
