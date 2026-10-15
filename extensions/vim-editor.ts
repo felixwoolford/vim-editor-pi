@@ -204,8 +204,9 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /**
  * Wrap visible columns [c0, c1) of an already-rendered line in `sgr`.
  * Walks the string once so every escape sequence is preserved exactly where it
- * was, and re-asserts `sgr` after any reset inside the range -- the cursor cell
- * ends with one, which would otherwise cut the highlight short.
+ * was, and re-asserts `sgr` after any reset inside the range. Resolve a selected
+ * cursor's deferred wrappers here, so pi's later cursor pass cannot turn off
+ * reverse video for the rest of the selection.
  */
 function highlightColumns(line: string, c0: number, c1: number, sgr: string): string {
 	if (c1 <= c0) return line;
@@ -232,6 +233,7 @@ function highlightColumns(line: string, c0: number, c1: number, sgr: string): st
 	let out = "";
 	let col = 0;
 	let on = false;
+	let selectedCursor = false;
 	for (const token of tokens) {
 		if (!on && col >= c0 && col < c1) {
 			out += sgr;
@@ -241,7 +243,15 @@ function highlightColumns(line: string, c0: number, c1: number, sgr: string): st
 			on = false;
 		}
 		if ("ansi" in token) {
-			if (on && token.ansi === sgr) {
+			if (on && token.ansi === FAKE_CURSOR_START) {
+				out += SELECTION_CURSOR_SGR;
+				selectedCursor = true;
+			} else if (selectedCursor && token.ansi === FAKE_CURSOR_END) {
+				// Consume both wrappers, even when the cursor ends the selection.
+				// Leaving the closing marker for pi would clear our reverse video.
+				out += on ? sgr : RESET_SGR;
+				selectedCursor = false;
+			} else if (on && token.ansi === sgr) {
 				out += SELECTION_CURSOR_SGR; // the cursor cell
 			} else {
 				out += token.ansi;
