@@ -27,5 +27,14 @@ Update: `pi update git:github.com/felixwoolford/vim-editor-pi`.
 | Newline | Shift+Enter or Ctrl+J in either mode |
 | Escape | Cancels a pending operator/motion or leaves insert/visual mode; otherwise does nothing in normal |
 | Abort agent | Ctrl+Escape in normal mode |
+| Thinking visibility | `t` in normal mode toggles pi's **Hide thinking** setting |
 
 Ctrl+Enter and Ctrl+Escape need a terminal reporting modified keys; your desktop must not intercept Ctrl+Escape. Other pi shortcuts are forwarded.
+
+## Pi-specific normal-mode functions
+
+`extensions/lib/normal-mode-functions.ts` keeps pi actions separate from Vim editing. It is part of the same extension, not a second extension to load. Add key/action mappings there for more normal-mode functions.
+
+`t` invokes pi's built-in thinking-visibility action, updating the display and saved setting without changing the model's thinking level. It does not toggle in insert, command, or visual modes, or while an operator/prefix is pending.
+
+For manual installs, keep `lib/` beside `vim-editor.ts`; copying the single file is no longer sufficient.

@@ -12,8 +12,14 @@
   "pi": {
     "extensions": ["./extensions/vim-editor.ts"]
   },
+  "scripts": {
+    "test": "tsx --test tests/*.test.ts"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15"
   }
 }

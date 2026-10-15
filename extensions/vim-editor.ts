@@ -1,8 +1,8 @@
 /**
  * vim-editor.ts — modal (vim-like) editing for the pi input box.
  *
- *   pi --extension ./vim-editor.ts
- *   # or: cp vim-editor.ts ~/.pi/agent/extensions/
+ *   pi --extension ./extensions/vim-editor.ts
+ *   # Keep lib/ beside vim-editor.ts when copying the extension manually.
  *
  * Modes: insert, normal, visual (charwise), visual-line.
  *
@@ -16,6 +16,7 @@
  *   y d c                      operators (see below)
  *   p P                        paste after / before cursor
  *   enter                      submit the prompt
+ *   t                          toggle pi's thinking-block visibility
  *   ctrl+escape                abort the running agent (pi's normal escape)
  *   escape                     cancel a pending operator, otherwise nothing
  *
@@ -68,6 +69,8 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+
+import { handleNormalModeFunction } from "./lib/normal-mode-functions.ts";
 
 /** Start each prompt in normal mode rather than insert mode. */
 const START_IN_NORMAL = true;
@@ -726,6 +729,10 @@ class VimEditor extends CustomEditor {
 			}
 			return;
 		}
+
+		// Pi-specific actions belong outside the Vim editing logic. Only dispatch
+		// standalone normal-mode keys, never visual keys or pending motions.
+		if (this.mode === "normal" && handleNormalModeFunction(key, this)) return;
 
 		if (this.motion(key)) return;
 
