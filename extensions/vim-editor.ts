@@ -17,6 +17,7 @@
  *   p P                        paste after / before cursor
  *   enter                      submit the prompt
  *   t                          toggle pi's thinking-block visibility
+ *   z                          emit toolview:toggle (toggle-tools extension)
  *   ctrl+escape                abort the running agent (pi's normal escape)
  *   escape                     cancel a pending operator, otherwise nothing
  *
@@ -60,7 +61,7 @@
  * mode uses a drawn underline -- see INSERT_CURSOR_STYLE below.
  */
 
-import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionAPI, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	CURSOR_MARKER,
 	decodeKittyPrintable,
@@ -68,6 +69,8 @@ import {
 	renderFakeCursor,
 	truncateToWidth,
 	visibleWidth,
+	type EditorTheme,
+	type TUI,
 } from "@earendil-works/pi-tui";
 
 import { handleNormalModeFunction } from "./lib/normal-mode-functions.ts";
@@ -310,6 +313,15 @@ class VimEditor extends CustomEditor {
 	private register: Register = { text: "", linewise: false };
 	private draft: Draft | null = null;
 	private commandLabel = " COMMAND ";
+
+	constructor(
+		tui: TUI,
+		theme: EditorTheme,
+		keybindings: KeybindingsManager,
+		private readonly emitEvent: ExtensionAPI["events"]["emit"],
+	) {
+		super(tui, theme, keybindings);
+	}
 
 	// ---------------------------------------------------------------- access
 
@@ -742,7 +754,7 @@ class VimEditor extends CustomEditor {
 
 		// Pi-specific actions belong outside the Vim editing logic. Only dispatch
 		// standalone normal-mode keys, never visual keys or pending motions.
-		if (this.mode === "normal" && handleNormalModeFunction(key, this)) return;
+		if (this.mode === "normal" && handleNormalModeFunction(key, this, this.emitEvent)) return;
 
 		if (this.motion(key)) return;
 
@@ -1092,7 +1104,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-			editor = new VimEditor(tui, theme, keybindings);
+			editor = new VimEditor(tui, theme, keybindings, (channel, data) => pi.events.emit(channel, data));
 			return editor;
 		});
 	});
